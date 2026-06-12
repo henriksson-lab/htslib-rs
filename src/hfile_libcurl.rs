@@ -7,8 +7,8 @@
 )]
 use crate::htslib_rs::{
     hfile::{
-        hFILE_plugin, hFILE_scheme_handler, hclose, hclose_abruptly, hfile_add_scheme_handler,
-        hfile_c_1342_hfile_always_remote, hopen, hpeek, HFileBackend,
+        hFILE_plugin, hclose, hclose_abruptly, hfile_add_scheme_handler,
+        hfile_c_1342_hfile_always_remote, hopen, hpeek, HFileBackend, HFileSchemeBackend,
     },
     hts::{hFILE, hts_json_token, hts_verbose, ks_release, kstring_t},
     textutils::{
@@ -138,25 +138,6 @@ pub(crate) type HFileLibcurlHttpHeaderCallback =
     unsafe extern "C" fn(*mut c_void, *mut *mut *mut u8) -> i32;
 pub(crate) type HFileLibcurlRedirectCallback =
     unsafe extern "C" fn(*mut c_void, i64, *mut kstring_t, *mut kstring_t) -> i32;
-
-type HFileOpenFn = unsafe extern "C" fn(*const u8, *const u8) -> *mut hFILE;
-type HFileIsRemoteFn = unsafe extern "C" fn(*const u8) -> i32;
-type HFileVOpenFn = for<'a> unsafe fn(
-    *const u8,
-    *const u8,
-    &'a [crate::htslib_rs::hfile::HFileOpt<'a>],
-) -> *mut hFILE;
-
-#[repr(C)]
-struct HFileSchemeHandlerLayout {
-    open: Option<HFileOpenFn>,
-    isremote: Option<HFileIsRemoteFn>,
-    provider: *const u8,
-    priority: i32,
-    vopen: Option<HFileVOpenFn>,
-}
-
-unsafe impl Sync for HFileSchemeHandlerLayout {}
 
 #[repr(C)]
 struct HFilePluginLayout {
@@ -2210,16 +2191,33 @@ pub unsafe fn hfile_libcurl_c_1664_vhopen_libcurl(
     fp
 }
 
+struct LibcurlBackend;
+impl HFileSchemeBackend for LibcurlBackend {
+    fn provider(&self) -> &'static [u8] {
+        b"libcurl"
+    }
+    fn priority(&self) -> i32 {
+        2050
+    }
+    unsafe fn open(&self, fname: *const u8, mode: *const u8) -> *mut hFILE {
+        hfile_libcurl_open(fname, mode)
+    }
+    unsafe fn is_remote(&self, fname: *const u8) -> i32 {
+        hfile_c_1342_hfile_always_remote(fname)
+    }
+    unsafe fn vopen(
+        &self,
+        fname: *const u8,
+        mode: *const u8,
+        opts: &[crate::htslib_rs::hfile::HFileOpt],
+    ) -> Option<*mut hFILE> {
+        Some(hfile_libcurl_c_1664_vhopen_libcurl(fname, mode, opts))
+    }
+}
+static LIBCURL_BACKEND: LibcurlBackend = LibcurlBackend;
+
 // original: PLUGIN_GLOBAL (htslib/hfile_libcurl.c:1679)
 pub unsafe fn hfile_libcurl_c_1679_PLUGIN_GLOBAL(self_: *mut hFILE_plugin) -> i32 {
-    static HANDLER: HFileSchemeHandlerLayout = HFileSchemeHandlerLayout {
-        open: Some(hfile_libcurl_open),
-        isremote: Some(hfile_c_1342_hfile_always_remote),
-        provider: c"libcurl".as_ptr().cast(),
-        priority: 2050,
-        vopen: Some(hfile_libcurl_c_1664_vhopen_libcurl),
-    };
-
     let err = curl_global_init(CURL_GLOBAL_ALL);
     if err != CURLE_OK {
         *libc::__errno_location() =
@@ -2313,10 +2311,7 @@ pub unsafe fn hfile_libcurl_c_1679_PLUGIN_GLOBAL(self_: *mut hFILE_plugin) -> i3
     if !info.is_null() && !(*info).protocols.is_null() {
         let mut protocol = (*info).protocols;
         while !(*protocol).is_null() {
-            hfile_add_scheme_handler(
-                (*protocol).cast(),
-                (&HANDLER as *const HFileSchemeHandlerLayout).cast::<hFILE_scheme_handler>(),
-            );
+            hfile_add_scheme_handler((*protocol).cast(), &LIBCURL_BACKEND);
             protocol = protocol.add(1);
         }
     } else {
@@ -2326,10 +2321,7 @@ pub unsafe fn hfile_libcurl_c_1679_PLUGIN_GLOBAL(self_: *mut hFILE_plugin) -> i3
             c"ftp".as_ptr(),
             c"ftps".as_ptr(),
         ] {
-            hfile_add_scheme_handler(
-                scheme.cast(),
-                (&HANDLER as *const HFileSchemeHandlerLayout).cast::<hFILE_scheme_handler>(),
-            );
+            hfile_add_scheme_handler(scheme.cast(), &LIBCURL_BACKEND);
         }
     }
 

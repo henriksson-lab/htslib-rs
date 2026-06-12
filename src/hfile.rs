@@ -55,10 +55,32 @@ pub enum HFileOpt<'a> {
     Parent(*mut hFILE),
 }
 
-type HFileOpenFn = unsafe extern "C" fn(*const u8, *const u8) -> *mut hFILE;
-type HFileIsRemoteFn = unsafe extern "C" fn(*const u8) -> i32;
-type HFileVOpenFn =
-    for<'a> unsafe fn(*const u8, *const u8, &'a [HFileOpt<'a>]) -> *mut hFILE;
+/// Idiomatic backend dispatch trait replacing the old `#[repr(C)]`
+/// fn-pointer vtable (`hfile_scheme_handler_layout`). Each scheme handler is a
+/// zero-sized unit struct implementing this trait; a `&'static dyn HFileSchemeBackend`
+/// is stored in the scheme registry.
+///
+/// Named `HFileSchemeBackend` (not `HFileBackend`) because the latter is the
+/// buffer-storage backend enum defined below.
+pub trait HFileSchemeBackend: Sync {
+    fn provider(&self) -> &'static [u8];
+    fn priority(&self) -> i32;
+    unsafe fn open(&self, fname: *const u8, mode: *const u8) -> *mut hFILE;
+    unsafe fn is_remote(&self, fname: *const u8) -> i32 {
+        let _ = fname;
+        0
+    }
+    unsafe fn vopen(
+        &self,
+        fname: *const u8,
+        mode: *const u8,
+        opts: &[HFileOpt],
+    ) -> Option<*mut hFILE> {
+        let _ = (fname, mode, opts);
+        None
+    }
+}
+
 type HFilePluginInitFn = unsafe extern "C" fn(*mut hFILE_plugin) -> i32;
 type HFilePluginDestroyFn = unsafe extern "C" fn();
 
@@ -90,17 +112,6 @@ impl<T> ConstNonNull<T> {
 }
 
 unsafe impl<T> Send for ConstNonNull<T> {}
-
-#[repr(C)]
-struct hfile_scheme_handler_layout {
-    open: Option<HFileOpenFn>,
-    isremote: Option<HFileIsRemoteFn>,
-    provider: *const u8,
-    priority: i32,
-    vopen: Option<HFileVOpenFn>,
-}
-
-unsafe impl Sync for hfile_scheme_handler_layout {}
 
 #[repr(C)]
 struct hfile_plugin_layout {
@@ -472,20 +483,20 @@ const HFILE_PRESERVE: u32 = 1 << 3;
 // inline in the HFileBackend::{read,write,seek,flush,close} match arms above
 // for the `Mem` and `Fd { fd, flags }` variants.
 
-pub unsafe fn hfile_c_1011_priority(handler: *const hFILE_scheme_handler) -> i32 {
-    (*(handler.cast::<hfile_scheme_handler_layout>())).priority % 1000
+pub unsafe fn hfile_c_1011_priority(handler: &dyn HFileSchemeBackend) -> i32 {
+    handler.priority() % 1000
 }
 
 pub unsafe fn hfile_c_1026_try_exe_add_scheme_handler(
     _scheme: *const u8,
-    _handler: *const hFILE_scheme_handler,
+    _handler: &'static dyn HFileSchemeBackend,
 ) -> i32 {
     -1
 }
 
 pub unsafe fn hfile_c_1046_try_exe_add_scheme_handler(
     _scheme: *const u8,
-    _handler: *const hFILE_scheme_handler,
+    _handler: &'static dyn HFileSchemeBackend,
 ) -> i32 {
     -1
 }
@@ -1981,37 +1992,54 @@ pub unsafe extern "C" fn hfile_c_935_crypt4gh_needed(
     std::ptr::null_mut()
 }
 
-pub unsafe fn hfile_c_920_hfile_plugin_init_mem(self_: *mut hFILE_plugin) -> i32 {
-    static HANDLER: hfile_scheme_handler_layout = hfile_scheme_handler_layout {
-        open: Some(hfile_c_915_hopen_not_supported),
-        isremote: Some(hfile_c_1342_hfile_always_remote),
-        provider: c"mem".as_ptr().cast::<u8>(),
-        priority: 2050,
-        vopen: Some(hfile_c_878_hopenv_mem_va),
-    };
+struct MemBackend;
+impl HFileSchemeBackend for MemBackend {
+    fn provider(&self) -> &'static [u8] {
+        b"mem"
+    }
+    fn priority(&self) -> i32 {
+        2050
+    }
+    unsafe fn open(&self, fname: *const u8, mode: *const u8) -> *mut hFILE {
+        hfile_c_915_hopen_not_supported(fname, mode)
+    }
+    unsafe fn is_remote(&self, fname: *const u8) -> i32 {
+        hfile_c_1342_hfile_always_remote(fname)
+    }
+    unsafe fn vopen(
+        &self,
+        fname: *const u8,
+        mode: *const u8,
+        opts: &[HFileOpt],
+    ) -> Option<*mut hFILE> {
+        Some(hfile_c_878_hopenv_mem_va(fname, mode, opts))
+    }
+}
+static MEM_BACKEND: MemBackend = MemBackend;
 
+pub unsafe fn hfile_c_920_hfile_plugin_init_mem(self_: *mut hFILE_plugin) -> i32 {
     (*(self_.cast::<hfile_plugin_layout>())).name = c"mem".as_ptr().cast::<u8>();
-    hfile_add_scheme_handler(
-        c"mem".as_ptr().cast::<u8>(),
-        (&HANDLER as *const hfile_scheme_handler_layout).cast(),
-    );
+    hfile_add_scheme_handler(c"mem".as_ptr().cast::<u8>(), &MEM_BACKEND);
     0
 }
 
-pub unsafe fn hfile_c_956_hfile_plugin_init_crypt4gh_needed(self_: *mut hFILE_plugin) -> i32 {
-    static HANDLER: hfile_scheme_handler_layout = hfile_scheme_handler_layout {
-        open: Some(hfile_c_935_crypt4gh_needed),
-        isremote: Some(hfile_c_1339_hfile_always_local),
-        provider: c"crypt4gh-needed".as_ptr().cast::<u8>(),
-        priority: 0,
-        vopen: None,
-    };
+struct Crypt4ghNeededBackend;
+impl HFileSchemeBackend for Crypt4ghNeededBackend {
+    fn provider(&self) -> &'static [u8] {
+        b"crypt4gh-needed"
+    }
+    fn priority(&self) -> i32 {
+        0
+    }
+    unsafe fn open(&self, fname: *const u8, mode: *const u8) -> *mut hFILE {
+        hfile_c_935_crypt4gh_needed(fname, mode)
+    }
+}
+static CRYPT4GH_NEEDED_BACKEND: Crypt4ghNeededBackend = Crypt4ghNeededBackend;
 
+pub unsafe fn hfile_c_956_hfile_plugin_init_crypt4gh_needed(self_: *mut hFILE_plugin) -> i32 {
     (*(self_.cast::<hfile_plugin_layout>())).name = c"crypt4gh-needed".as_ptr().cast::<u8>();
-    hfile_add_scheme_handler(
-        c"crypt4gh".as_ptr().cast::<u8>(),
-        (&HANDLER as *const hfile_scheme_handler_layout).cast(),
-    );
+    hfile_add_scheme_handler(c"crypt4gh".as_ptr().cast::<u8>(), &CRYPT4GH_NEEDED_BACKEND);
     0
 }
 
@@ -2026,7 +2054,7 @@ struct HFilePluginState {
 
 struct HFileSchemeEntry {
     scheme: ConstNonNull<u8>,
-    handler: ConstNonNull<hFILE_scheme_handler>,
+    handler: &'static dyn HFileSchemeBackend,
 }
 
 fn hfile_plugin_state() -> &'static Mutex<HFilePluginState> {
@@ -2037,7 +2065,7 @@ fn hfile_plugin_state() -> &'static Mutex<HFilePluginState> {
 unsafe fn hfile_c_1053_add_scheme_handler_locked(
     state: &mut HFilePluginState,
     scheme: *const u8,
-    handler: *const hFILE_scheme_handler,
+    handler: &'static dyn HFileSchemeBackend,
 ) {
     let schemes = match state.schemes.as_mut() {
         Some(schemes) => schemes,
@@ -2046,19 +2074,10 @@ unsafe fn hfile_c_1053_add_scheme_handler_locked(
     let Some(scheme) = ConstNonNull::new(scheme) else {
         return;
     };
-    let Some(handler) = ConstNonNull::new(handler) else {
-        return;
-    };
-    let handler_layout = handler.as_ptr().cast::<hfile_scheme_handler_layout>();
-    if (*handler_layout).open.is_none() || (*handler_layout).isremote.is_none() {
-        return;
-    }
 
     for entry in schemes.iter_mut() {
         if libc::strcmp(entry.scheme.as_ptr().cast(), scheme.as_ptr().cast()) == 0 {
-            if hfile_c_1011_priority(handler.as_ptr())
-                > hfile_c_1011_priority(entry.handler.as_ptr())
-            {
+            if hfile_c_1011_priority(handler) > hfile_c_1011_priority(entry.handler) {
                 entry.handler = handler;
             }
             return;
@@ -2071,7 +2090,7 @@ unsafe fn hfile_c_1053_add_scheme_handler_locked(
 // original: hfile_add_scheme_handler (htslib/hfile.c:1053)
 pub unsafe fn hfile_c_1053_hfile_add_scheme_handler(
     scheme: *const u8,
-    handler: *const hFILE_scheme_handler,
+    handler: &'static dyn HFileSchemeBackend,
 ) {
     let mut state = hfile_plugin_state().lock().unwrap();
     if state.schemes.is_none() {
@@ -2156,29 +2175,50 @@ unsafe extern "C" fn hfile_c_1116_preload_isremote(fname: *const u8) -> i32 {
     hfile_c_726_is_preload_url_remote(fname)
 }
 
-static HFILE_C_1114_DATA_HANDLER: hfile_scheme_handler_layout = hfile_scheme_handler_layout {
-    open: Some(hfile_c_1114_data_open),
-    isremote: Some(hfile_c_1339_hfile_always_local),
-    provider: c"built-in".as_ptr().cast::<u8>(),
-    priority: 80,
-    vopen: None,
-};
+struct DataBackend;
+impl HFileSchemeBackend for DataBackend {
+    fn provider(&self) -> &'static [u8] {
+        b"built-in"
+    }
+    fn priority(&self) -> i32 {
+        80
+    }
+    unsafe fn open(&self, fname: *const u8, mode: *const u8) -> *mut hFILE {
+        hfile_c_1114_data_open(fname, mode)
+    }
+}
+static HFILE_C_1114_DATA_HANDLER: DataBackend = DataBackend;
 
-static HFILE_C_1115_FILE_HANDLER: hfile_scheme_handler_layout = hfile_scheme_handler_layout {
-    open: Some(hfile_c_1115_file_open),
-    isremote: Some(hfile_c_1339_hfile_always_local),
-    provider: c"built-in".as_ptr().cast::<u8>(),
-    priority: 80,
-    vopen: None,
-};
+struct FileBackend;
+impl HFileSchemeBackend for FileBackend {
+    fn provider(&self) -> &'static [u8] {
+        b"built-in"
+    }
+    fn priority(&self) -> i32 {
+        80
+    }
+    unsafe fn open(&self, fname: *const u8, mode: *const u8) -> *mut hFILE {
+        hfile_c_1115_file_open(fname, mode)
+    }
+}
+static HFILE_C_1115_FILE_HANDLER: FileBackend = FileBackend;
 
-static HFILE_C_1116_PRELOAD_HANDLER: hfile_scheme_handler_layout = hfile_scheme_handler_layout {
-    open: Some(hfile_c_1116_preload_open),
-    isremote: Some(hfile_c_1116_preload_isremote),
-    provider: c"built-in".as_ptr().cast::<u8>(),
-    priority: 80,
-    vopen: None,
-};
+struct PreloadBackend;
+impl HFileSchemeBackend for PreloadBackend {
+    fn provider(&self) -> &'static [u8] {
+        b"built-in"
+    }
+    fn priority(&self) -> i32 {
+        80
+    }
+    unsafe fn open(&self, fname: *const u8, mode: *const u8) -> *mut hFILE {
+        hfile_c_1116_preload_open(fname, mode)
+    }
+    unsafe fn is_remote(&self, fname: *const u8) -> i32 {
+        hfile_c_1116_preload_isremote(fname)
+    }
+}
+static HFILE_C_1116_PRELOAD_HANDLER: PreloadBackend = PreloadBackend;
 
 // original: load_hfile_plugins (htslib/hfile.c:1111)
 //
@@ -2208,15 +2248,15 @@ pub unsafe fn hfile_c_1111_load_hfile_plugins() -> i32 {
 
     hfile_c_1053_hfile_add_scheme_handler(
         c"data".as_ptr().cast::<u8>(),
-        (&HFILE_C_1114_DATA_HANDLER as *const hfile_scheme_handler_layout).cast(),
+        &HFILE_C_1114_DATA_HANDLER,
     );
     hfile_c_1053_hfile_add_scheme_handler(
         c"file".as_ptr().cast::<u8>(),
-        (&HFILE_C_1115_FILE_HANDLER as *const hfile_scheme_handler_layout).cast(),
+        &HFILE_C_1115_FILE_HANDLER,
     );
     hfile_c_1053_hfile_add_scheme_handler(
         c"preload".as_ptr().cast::<u8>(),
-        (&HFILE_C_1116_PRELOAD_HANDLER as *const hfile_scheme_handler_layout).cast(),
+        &HFILE_C_1116_PRELOAD_HANDLER,
     );
     hfile_c_1079_init_add_plugin(
         std::ptr::null_mut(),
@@ -2261,16 +2301,27 @@ unsafe extern "C" fn hfile_c_1178_unknown_isremote(fname: *const u8) -> i32 {
     hfile_c_1339_hfile_always_local(fname)
 }
 
-static HFILE_C_1178_UNKNOWN_SCHEME: hfile_scheme_handler_layout = hfile_scheme_handler_layout {
-    open: Some(hfile_c_1168_unknown_open),
-    isremote: Some(hfile_c_1178_unknown_isremote),
-    provider: c"built-in".as_ptr().cast::<u8>(),
-    priority: 0,
-    vopen: None,
-};
+struct UnknownSchemeBackend;
+impl HFileSchemeBackend for UnknownSchemeBackend {
+    fn provider(&self) -> &'static [u8] {
+        b"built-in"
+    }
+    fn priority(&self) -> i32 {
+        0
+    }
+    unsafe fn open(&self, fname: *const u8, mode: *const u8) -> *mut hFILE {
+        hfile_c_1168_unknown_open(fname, mode)
+    }
+    unsafe fn is_remote(&self, fname: *const u8) -> i32 {
+        hfile_c_1178_unknown_isremote(fname)
+    }
+}
+static HFILE_C_1178_UNKNOWN_SCHEME: UnknownSchemeBackend = UnknownSchemeBackend;
 
 // original: find_scheme_handler (htslib/hfile.c:1176)
-pub unsafe fn hfile_c_1176_find_scheme_handler(s: *const u8) -> *const hFILE_scheme_handler {
+pub unsafe fn hfile_c_1176_find_scheme_handler(
+    s: *const u8,
+) -> Option<&'static dyn HFileSchemeBackend> {
     let mut scheme = [0u8; 12];
     let mut i = 0usize;
     while i < scheme.len() {
@@ -2280,20 +2331,20 @@ pub unsafe fn hfile_c_1176_find_scheme_handler(s: *const u8) -> *const hFILE_sch
         } else if c == b':' as u8 {
             break;
         } else {
-            return std::ptr::null();
+            return None;
         }
         i += 1;
     }
 
     if i <= 1 || i >= scheme.len() {
-        return std::ptr::null();
+        return None;
     }
     scheme[i] = 0;
 
     {
         let needs_load = hfile_plugin_state().lock().unwrap().schemes.is_none();
         if needs_load && hfile_c_1111_load_hfile_plugins() < 0 {
-            return std::ptr::null();
+            return None;
         }
     }
 
@@ -2301,12 +2352,12 @@ pub unsafe fn hfile_c_1176_find_scheme_handler(s: *const u8) -> *const hFILE_sch
     if let Some(schemes) = &state.schemes {
         for entry in schemes {
             if libc::strcmp(entry.scheme.as_ptr().cast(), scheme.as_ptr().cast()) == 0 {
-                return entry.handler.as_ptr();
+                return Some(entry.handler);
             }
         }
     }
 
-    (&HFILE_C_1178_UNKNOWN_SCHEME as *const hfile_scheme_handler_layout).cast()
+    Some(&HFILE_C_1178_UNKNOWN_SCHEME)
 }
 
 pub unsafe fn hfile_c_983_hfile_shutdown(do_close_plugin: i32) {
@@ -2345,16 +2396,13 @@ pub unsafe fn hfile_c_1317_hopen_vargs(
         *libc::__errno_location() = libc::EINVAL;
         return std::ptr::null_mut();
     };
-    let handler = hfile_c_1176_find_scheme_handler(fname);
-    if !handler.is_null() {
-        let handler = handler.cast::<hfile_scheme_handler_layout>();
-        if !hfile_mode_has(mode_bytes, b':')
-            || (*handler).priority < 2000
-            || (*handler).vopen.is_none()
-        {
-            return (*handler).open.expect("hFILE open handler")(fname, mode);
+    if let Some(backend) = hfile_c_1176_find_scheme_handler(fname) {
+        if hfile_mode_has(mode_bytes, b':') && backend.priority() >= 2000 {
+            if let Some(fp) = backend.vopen(fname, mode, opts) {
+                return fp;
+            }
         }
-        return (*handler).vopen.expect("hFILE vopen handler")(fname, mode, opts);
+        return backend.open(fname, mode);
     }
 
     if libc::strcmp(fname.cast(), c"-".as_ptr()) == 0 {
@@ -2393,9 +2441,12 @@ pub unsafe fn hfile_c_1218_hfile_list_schemes(
     let mut ns = 0;
     if let Some(schemes) = &state.schemes {
         for entry in schemes {
-            let handler = entry.handler.as_ptr().cast::<hfile_scheme_handler_layout>();
-            if !plugin.is_null() && libc::strcmp((*handler).provider.cast(), plugin.cast()) != 0 {
-                continue;
+            if !plugin.is_null() {
+                let provider = entry.handler.provider();
+                let plugin_bytes = CStr::from_ptr(plugin.cast()).to_bytes();
+                if provider != plugin_bytes {
+                    continue;
+                }
             }
 
             if ns < *nschemes {
@@ -2463,11 +2514,8 @@ pub unsafe fn hfile_c_1293_hfile_has_plugin(name: *const u8) -> i32 {
 }
 
 pub unsafe fn hfile_c_1345_hisremote(fname: *const u8) -> i32 {
-    let handler = hfile_c_1176_find_scheme_handler(fname);
-    if !handler.is_null() {
-        return (*(handler.cast::<hfile_scheme_handler_layout>()))
-            .isremote
-            .expect("hFILE isremote handler")(fname);
+    if let Some(backend) = hfile_c_1176_find_scheme_handler(fname) {
+        return backend.is_remote(fname);
     }
     0
 }
@@ -2494,7 +2542,7 @@ pub unsafe fn hfile_c_1364_haddextension(
     replace: i32,
     new_extension: *const u8,
 ) -> *mut u8 {
-    let trailing = if !hfile_c_1176_find_scheme_handler(filename).is_null() {
+    let trailing = if hfile_c_1176_find_scheme_handler(filename).is_some() {
         let span = if libc::strncmp(filename.cast(), c"s3://".as_ptr(), 5) != 0
             && libc::strncmp(filename.cast(), c"s3+http://".as_ptr(), 10) != 0
             && libc::strncmp(filename.cast(), c"s3+https://".as_ptr(), 11) != 0
@@ -2833,7 +2881,7 @@ pub unsafe fn hfile_has_plugin(name: *const u8) -> i32 {
 
 pub unsafe fn hfile_add_scheme_handler(
     scheme: *const u8,
-    handler: *const hFILE_scheme_handler,
+    handler: &'static dyn HFileSchemeBackend,
 ) {
     hfile_c_1053_hfile_add_scheme_handler(scheme, handler)
 }
@@ -3446,17 +3494,14 @@ mod tests {
     fn hfile_scheme_parser_accepts_scheme_alphabet_and_rejects_non_schemes() {
         unsafe {
             let data = hfile_c_1176_find_scheme_handler(c"DATA:text/plain,abc".as_ptr().cast::<u8>());
-            assert!(!data.is_null());
-            assert_eq!(
-                CStr::from_ptr((*data.cast::<hfile_scheme_handler_layout>()).provider.cast()).to_bytes(),
-                b"built-in"
-            );
+            assert!(data.is_some());
+            assert_eq!(data.unwrap().provider(), b"built-in");
 
-            assert!(!hfile_c_1176_find_scheme_handler(c"s3+https://bucket/key".as_ptr().cast::<u8>()).is_null());
-            assert!(!hfile_c_1176_find_scheme_handler(c"ab-c.d:path".as_ptr().cast::<u8>()).is_null());
-            assert!(hfile_c_1176_find_scheme_handler(c"x:path".as_ptr().cast::<u8>()).is_null());
-            assert!(hfile_c_1176_find_scheme_handler(c"abcdefghijkl:path".as_ptr().cast::<u8>()).is_null());
-            assert!(hfile_c_1176_find_scheme_handler(c"/tmp/has:no-scheme".as_ptr().cast::<u8>()).is_null());
+            assert!(hfile_c_1176_find_scheme_handler(c"s3+https://bucket/key".as_ptr().cast::<u8>()).is_some());
+            assert!(hfile_c_1176_find_scheme_handler(c"ab-c.d:path".as_ptr().cast::<u8>()).is_some());
+            assert!(hfile_c_1176_find_scheme_handler(c"x:path".as_ptr().cast::<u8>()).is_none());
+            assert!(hfile_c_1176_find_scheme_handler(c"abcdefghijkl:path".as_ptr().cast::<u8>()).is_none());
+            assert!(hfile_c_1176_find_scheme_handler(c"/tmp/has:no-scheme".as_ptr().cast::<u8>()).is_none());
 
             let fp = hfile_c_1317_hopen(c"DATA:,upper%20scheme".as_ptr().cast::<u8>(), c"r".as_ptr().cast::<u8>());
             assert!(!fp.is_null());
@@ -3491,17 +3536,19 @@ mod tests {
                 libc::EPROTONOSUPPORT
             );
 
-            let handler = hfile_scheme_handler_layout {
-                open: None,
-                isremote: None,
-                provider: c"test".as_ptr().cast::<u8>(),
-                priority: 2050,
-                vopen: None,
-            };
-            assert_eq!(
-                hfile_c_1011_priority((&handler as *const hfile_scheme_handler_layout).cast()),
-                50
-            );
+            struct TestBackend;
+            impl HFileSchemeBackend for TestBackend {
+                fn provider(&self) -> &'static [u8] {
+                    b"test"
+                }
+                fn priority(&self) -> i32 {
+                    2050
+                }
+                unsafe fn open(&self, _fname: *const u8, _mode: *const u8) -> *mut hFILE {
+                    std::ptr::null_mut()
+                }
+            }
+            assert_eq!(hfile_c_1011_priority(&TestBackend), 50);
         }
     }
 
@@ -3641,10 +3688,10 @@ mod tests {
     fn hfile_unknown_scheme_fallback_is_local_like_upstream() {
         unsafe {
             let handler = hfile_c_1176_find_scheme_handler(c"zz-example://host/path".as_ptr().cast::<u8>());
-            assert!(!handler.is_null());
-            let handler = handler.cast::<hfile_scheme_handler_layout>();
-            assert_eq!(CStr::from_ptr((*handler).provider.cast()).to_bytes(), b"built-in");
-            assert_eq!((*handler).priority, 0);
+            assert!(handler.is_some());
+            let handler = handler.unwrap();
+            assert_eq!(handler.provider(), b"built-in");
+            assert_eq!(handler.priority(), 0);
             assert_eq!(hisremote(c"zz-example://host/path".as_ptr().cast::<u8>()), 0);
         }
     }

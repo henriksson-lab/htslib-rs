@@ -23,28 +23,12 @@ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.  */
 
 use crate::htslib_rs::{
-    hfile::{hFILE_plugin, hFILE_scheme_handler, hfile_add_scheme_handler},
+    hfile::{hFILE_plugin, hfile_add_scheme_handler, HFileSchemeBackend},
     hts::{hFILE, hts_verbose},
 };
 use std::ptr::NonNull;
 
 use crate::htslib_rs::hfile::HFileOpt;
-
-type HFileOpenFn = unsafe extern "C" fn(*const u8, *const u8) -> *mut hFILE;
-type HFileIsRemoteFn = unsafe extern "C" fn(*const u8) -> i32;
-type HFileVOpenFn =
-    for<'a> unsafe fn(*const u8, *const u8, &'a [HFileOpt<'a>]) -> *mut hFILE;
-
-#[repr(C)]
-struct hFILE_scheme_handler_layout {
-    open: Option<HFileOpenFn>,
-    isremote: Option<HFileIsRemoteFn>,
-    provider: *const u8,
-    priority: i32,
-    vopen: Option<HFileVOpenFn>,
-}
-
-unsafe impl Sync for hFILE_scheme_handler_layout {}
 
 #[repr(C)]
 struct hFILE_plugin_layout {
@@ -323,29 +307,37 @@ unsafe fn hfile_gcs_c_130_gcs_vopen(
     )
 }
 
+struct GcsBackend;
+impl HFileSchemeBackend for GcsBackend {
+    fn provider(&self) -> &'static [u8] {
+        b"Google Cloud Storage"
+    }
+    fn priority(&self) -> i32 {
+        2000 + 50
+    }
+    unsafe fn open(&self, fname: *const u8, mode: *const u8) -> *mut hFILE {
+        hfile_gcs_c_125_gcs_open(fname, mode)
+    }
+    unsafe fn is_remote(&self, fname: *const u8) -> i32 {
+        crate::htslib_rs::hfile::hfile_c_1342_hfile_always_remote(fname)
+    }
+    unsafe fn vopen(
+        &self,
+        fname: *const u8,
+        mode: *const u8,
+        opts: &[HFileOpt],
+    ) -> Option<*mut hFILE> {
+        Some(hfile_gcs_c_130_gcs_vopen(fname, mode, opts))
+    }
+}
+static GCS_BACKEND: GcsBackend = GcsBackend;
+
 // original: PLUGIN_GLOBAL (htslib/hfile_gcs.c:141)
 unsafe fn hfile_gcs_plugin_global(plugin: &mut hFILE_plugin_layout) -> i32 {
-    static HANDLER: hFILE_scheme_handler_layout = hFILE_scheme_handler_layout {
-        open: Some(hfile_gcs_c_125_gcs_open),
-        isremote: Some(crate::htslib_rs::hfile::hfile_c_1342_hfile_always_remote),
-        provider: c"Google Cloud Storage".as_ptr().cast(),
-        priority: 2000 + 50,
-        vopen: Some(hfile_gcs_c_130_gcs_vopen),
-    };
-
     plugin.name = c"Google Cloud Storage".as_ptr().cast();
-    hfile_add_scheme_handler(
-        c"gs".as_ptr().cast(),
-        (&HANDLER as *const hFILE_scheme_handler_layout).cast::<hFILE_scheme_handler>(),
-    );
-    hfile_add_scheme_handler(
-        c"gs+http".as_ptr().cast(),
-        (&HANDLER as *const hFILE_scheme_handler_layout).cast::<hFILE_scheme_handler>(),
-    );
-    hfile_add_scheme_handler(
-        c"gs+https".as_ptr().cast(),
-        (&HANDLER as *const hFILE_scheme_handler_layout).cast::<hFILE_scheme_handler>(),
-    );
+    hfile_add_scheme_handler(c"gs".as_ptr().cast(), &GCS_BACKEND);
+    hfile_add_scheme_handler(c"gs+http".as_ptr().cast(), &GCS_BACKEND);
+    hfile_add_scheme_handler(c"gs+https".as_ptr().cast(), &GCS_BACKEND);
     0
 }
 

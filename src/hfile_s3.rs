@@ -8,11 +8,12 @@
 
 use crate::htslib_rs::{
     hfile::{
-        hFILE_plugin, hFILE_scheme_handler, hclose_abruptly, hfile_add_scheme_handler,
+        hFILE_plugin, hclose_abruptly, hfile_add_scheme_handler,
         hfile_c_1317_hopen_vargs, htslib_hfile_h_247_hread,
     },
     hfile::HFileBackend,
     hfile::HFileOpt,
+    hfile::HFileSchemeBackend,
     hts::{hFILE, hts_verbose, kstring_t},
 };
 use std::ffi::c_void;
@@ -144,30 +145,12 @@ const CURLOPT_POSTFIELDSIZE: i32 = 60;
 const CURLOPT_HEADERFUNCTION: i32 = 20_079;
 const CURLOPT_INFILESIZE_LARGE: i32 = 30_115;
 
-type HFileOpenFn = unsafe extern "C" fn(*const u8, *const u8) -> *mut hFILE;
-type HFileIsRemoteFn = unsafe extern "C" fn(*const u8) -> i32;
-type HFileVOpenFn = for<'a> unsafe fn(
-    *const u8,
-    *const u8,
-    &'a [crate::htslib_rs::hfile::HFileOpt<'a>],
-) -> *mut hFILE;
 type HFilePluginDestroyFn = unsafe extern "C" fn();
 
 // The old `#[repr(C)] struct hFILE_backend` vtable (read/write/seek/flush/close
 // fn pointers) and the `HFileLayout` C base struct are gone: the five hFILE
 // operations are now methods on `HFileBackend` (see hfile.rs) and the buffer
 // state lives directly in the owned `hFILE` (see hts.rs).
-
-#[repr(C)]
-struct hFILE_scheme_handler_layout {
-    open: Option<HFileOpenFn>,
-    isremote: Option<HFileIsRemoteFn>,
-    provider: *const u8,
-    priority: i32,
-    vopen: Option<HFileVOpenFn>,
-}
-
-unsafe impl Sync for hFILE_scheme_handler_layout {}
 
 #[repr(C)]
 struct hFILE_plugin_layout {
@@ -3241,16 +3224,33 @@ pub unsafe extern "C" fn hfile_s3_c_2426_s3_exit() {
     HFILE_S3_USERAGENT.data = Vec::new();
 }
 
+struct S3Backend;
+impl HFileSchemeBackend for S3Backend {
+    fn provider(&self) -> &'static [u8] {
+        b"Amazon S3"
+    }
+    fn priority(&self) -> i32 {
+        2000 + 50
+    }
+    unsafe fn open(&self, fname: *const u8, mode: *const u8) -> *mut hFILE {
+        hfile_s3_c_2400_hopen_s3(fname, mode)
+    }
+    unsafe fn is_remote(&self, fname: *const u8) -> i32 {
+        crate::htslib_rs::hfile::hfile_c_1342_hfile_always_remote(fname)
+    }
+    unsafe fn vopen(
+        &self,
+        fname: *const u8,
+        mode: *const u8,
+        opts: &[HFileOpt],
+    ) -> Option<*mut hFILE> {
+        Some(hfile_s3_c_2414_vhopen_s3(fname, mode, opts))
+    }
+}
+static S3_BACKEND: S3Backend = S3Backend;
+
 // original: PLUGIN_GLOBAL (htslib/hfile_s3.c:2436)
 pub unsafe fn hfile_s3_c_2436_PLUGIN_GLOBAL(self_: *mut hFILE_plugin) -> i32 {
-    static HANDLER: hFILE_scheme_handler_layout = hFILE_scheme_handler_layout {
-        open: Some(hfile_s3_c_2400_hopen_s3),
-        isremote: Some(crate::htslib_rs::hfile::hfile_c_1342_hfile_always_remote),
-        provider: c"Amazon S3".as_ptr().cast(),
-        priority: 2000 + 50,
-        vopen: Some(hfile_s3_c_2414_vhopen_s3),
-    };
-
     (*self_.cast::<hFILE_plugin_layout>()).name = c"Amazon S3".as_ptr().cast();
     (*self_.cast::<hFILE_plugin_layout>()).destroy = Some(hfile_s3_c_2426_s3_exit);
     hfile_s3_c_2426_s3_exit();
@@ -3262,18 +3262,9 @@ pub unsafe fn hfile_s3_c_2436_PLUGIN_GLOBAL(self_: *mut hFILE_plugin) -> i32 {
                 .to_bytes(),
         )],
     );
-    hfile_add_scheme_handler(
-        c"s3".as_ptr().cast(),
-        (&HANDLER as *const hFILE_scheme_handler_layout).cast::<hFILE_scheme_handler>(),
-    );
-    hfile_add_scheme_handler(
-        c"s3+http".as_ptr().cast(),
-        (&HANDLER as *const hFILE_scheme_handler_layout).cast::<hFILE_scheme_handler>(),
-    );
-    hfile_add_scheme_handler(
-        c"s3+https".as_ptr().cast(),
-        (&HANDLER as *const hFILE_scheme_handler_layout).cast::<hFILE_scheme_handler>(),
-    );
+    hfile_add_scheme_handler(c"s3".as_ptr().cast(), &S3_BACKEND);
+    hfile_add_scheme_handler(c"s3+http".as_ptr().cast(), &S3_BACKEND);
+    hfile_add_scheme_handler(c"s3+https".as_ptr().cast(), &S3_BACKEND);
     0
 }
 
