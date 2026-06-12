@@ -164,7 +164,8 @@ type SocketCallback = unsafe extern "C" fn(
 type TimerCallback =
     unsafe extern "C" fn(multi: *mut CURLM, timeout_ms: i64, userp: *mut ()) -> i32;
 
-#[link(name = "curl")]
+// curl symbols link against curl-sys's vendored static libcurl (the link-pin
+// lives in hfile_libcurl.rs, also `libcurl`-gated); no `#[link]` directive here.
 #[allow(clashing_extern_declarations)]
 extern "C" {
     #[link_name = "curl_global_init"]

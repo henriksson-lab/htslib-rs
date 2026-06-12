@@ -363,7 +363,15 @@ struct CurlMsg {
 // it had no call sites. The libcurl plugin layer is now driven entirely by
 // the native `hfile_libcurl_c_*` functions in this file.)
 
-#[link(name = "curl")]
+// Link-pin: keep the `curl-sys` crate (vendored static libcurl + rustls TLS) in
+// the dependency graph so its `cargo:rustc-link-lib` directive lands on the link
+// line; the hand-written `extern "C"` curl symbols below then resolve against it.
+// This is the same pattern the zlib codec used for `libz-sys` before flate2.
+use curl_sys as _;
+
+// Symbols resolve against the `curl-sys` crate's vendored static libcurl
+// (rustls TLS) — see the `use curl_sys as _;` link-pin above and the `libcurl`
+// feature in Cargo.toml. No `#[link]` directive: curl-sys emits the link line.
 unsafe extern "C" {
     fn curl_global_init(flags: i64) -> i32;
     fn curl_global_cleanup();

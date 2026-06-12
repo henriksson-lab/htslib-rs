@@ -32,7 +32,9 @@ pub mod os_rand;
 pub mod plugin;
 pub mod probaln;
 pub mod realn;
-#[cfg(unix)]
+// The ref-cache daemon fetches references over HTTP via libcurl, so it is gated
+// behind the `libcurl` feature (its curl symbols link against curl-sys too).
+#[cfg(all(unix, feature = "libcurl"))]
 pub mod ref_cache;
 pub mod regidx;
 pub mod region;

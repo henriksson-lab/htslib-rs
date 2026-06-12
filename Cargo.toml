@@ -18,8 +18,13 @@ default = ["parity"]
 parity = []
 bin-mimalloc = ["dep:mimalloc"]
 gcs = ["libcurl"]
-libcurl = []
-s3 = ["libcurl"]
+# The libcurl hFILE backend's hand-written `extern "C"` curl symbols are now
+# linked against the `curl-sys` crate's vendored, statically-built libcurl with
+# a rustls TLS backend (no system libcurl, no system OpenSSL).
+libcurl = ["dep:curl-sys"]
+# S3 request signing (SigV2 HMAC-SHA1, SigV4 HMAC-SHA256 + SHA-256) uses the
+# pure-Rust RustCrypto crates instead of OpenSSL libcrypto.
+s3 = ["libcurl", "dep:hmac", "dep:sha2", "dep:sha1"]
 
 [dependencies]
 # `zlib-rs` selects flate2's pure-Rust zlib-rs backend (a Rust port of zlib, no
@@ -36,6 +41,14 @@ mimalloc = { version = "0.1", optional = true }
 regex = "1"
 tracehash-rs = "0.2.0"
 xz2 = "0.1"
+# Pure-Rust crypto for S3 request signing (replaces OpenSSL libcrypto); only
+# pulled in under the `s3` feature.
+hmac = { version = "0.12", optional = true }
+sha2 = { version = "0.10", optional = true }
+sha1 = { version = "0.10", optional = true }
+# Vendored static libcurl + rustls TLS; provides the link target for the
+# hand-written curl externs in hfile_libcurl/hfile_s3. Only under `libcurl`.
+curl-sys = { version = "0.4", features = ["static-curl", "rustls"], optional = true }
 
 [dev-dependencies]
 noodles = { version = "0.109.0", features = ["bgzf"] }

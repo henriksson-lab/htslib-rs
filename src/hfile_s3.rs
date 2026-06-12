@@ -244,7 +244,8 @@ impl Default for hFILE_s3 {
 // per-easy-handle option storage.
 static mut HFILE_S3_USERAGENT: kstring_t = kstring_t { data: Vec::new() };
 
-#[link(name = "curl")]
+// curl symbols resolve against curl-sys's vendored static libcurl (see
+// hfile_libcurl.rs's `use curl_sys as _;` link-pin); no `#[link]` here.
 unsafe extern "C" {
     fn curl_easy_cleanup(curl: *mut c_void);
     fn curl_easy_init() -> *mut c_void;
@@ -260,21 +261,6 @@ unsafe extern "C" {
     fn curl_slist_free_all(list: *mut HFileLibcurlCurlSlist);
 }
 
-#[link(name = "crypto")]
-unsafe extern "C" {
-    fn HMAC(
-        evp_md: *const c_void,
-        key: *const c_void,
-        key_len: i32,
-        d: *const u8,
-        n: usize,
-        md: *mut u8,
-        md_len: *mut u32,
-    ) -> *mut u8;
-    fn EVP_sha1() -> *const c_void;
-    fn EVP_sha256() -> *const c_void;
-    fn SHA256(d: *const u8, n: usize, md: *mut u8) -> *mut u8;
-}
 
 unsafe fn cstr_bytes(ptr: *const u8) -> Vec<u8> {
     if ptr.is_null() {
@@ -317,22 +303,23 @@ pub unsafe fn hfile_s3_c_142_s3_sign(
     key: *mut kstring_t,
     message: *mut kstring_t,
 ) -> usize {
-    let mut len = 0u32;
-    HMAC(
-        EVP_sha1(),
-        (*key).data.as_ptr().cast(),
-        (*key).data.len() as i32,
-        (*message).data.as_ptr().cast(),
-        (*message).data.len(),
-        digest,
-        &mut len,
-    );
-    len as usize
+    // HMAC-SHA1 (AWS SigV2) via pure-Rust RustCrypto.
+    use hmac::Mac as _;
+    let mut mac = hmac::Hmac::<sha1::Sha1>::new_from_slice(&(*key).data)
+        .expect("HMAC accepts a key of any length");
+    mac.update(&(*message).data);
+    let out = mac.finalize().into_bytes();
+    std::ptr::copy_nonoverlapping(out.as_ptr(), digest, out.len());
+    out.len()
 }
 
 // original: s3_sha256 (htslib/hfile_s3.c:152)
 pub unsafe fn hfile_s3_c_152_s3_sha256(in_: *const u8, length: usize, out: *mut u8) {
-    SHA256(in_, length, out);
+    use sha2::Digest as _;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(std::slice::from_raw_parts(in_, length));
+    let digest = hasher.finalize();
+    std::ptr::copy_nonoverlapping(digest.as_ptr(), out, digest.len());
 }
 
 // original: s3_sign_sha256 (htslib/hfile_s3.c:157)
@@ -344,7 +331,17 @@ pub unsafe fn hfile_s3_c_157_s3_sign_sha256(
     md: *mut u8,
     md_len: *mut u32,
 ) {
-    HMAC(EVP_sha256(), key, key_len, d, n as usize, md, md_len);
+    // HMAC-SHA256 (AWS SigV4) via pure-Rust RustCrypto.
+    use hmac::Mac as _;
+    let key_bytes = std::slice::from_raw_parts(key.cast::<u8>(), key_len as usize);
+    let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(key_bytes)
+        .expect("HMAC accepts a key of any length");
+    mac.update(std::slice::from_raw_parts(d, n as usize));
+    let out = mac.finalize().into_bytes();
+    std::ptr::copy_nonoverlapping(out.as_ptr(), md, out.len());
+    if !md_len.is_null() {
+        *md_len = out.len() as u32;
+    }
 }
 
 // original: urldecode_kput (htslib/hfile_s3.c:165)
