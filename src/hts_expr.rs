@@ -20,11 +20,11 @@ pub struct hts_filter_t {
     pub parsed: bool,
     pub curr_regex: usize,
     pub max_regex: usize,
-    // RECONVERGE: POSIX regex is a C-ABI portability boundary. c_compat::regex_t
-    // is `libc::regex_t` on non-Windows but a `regex`-crate-backed emulation on
-    // Windows (libc has no POSIX regex there). Kept as a genuine boundary so the
-    // Windows build still works; routing to libc directly would regress it.
-    pub preg: Vec<crate::htslib_rs::c_compat::regex_t>,
+    // Compiled regex cache: one lazily-compiled slot per `=~` position in the
+    // expression (reused across records). Uses the `regex` crate directly so no
+    // POSIX/libc regex (or its Windows `c_compat` shim) is needed; matching is
+    // byte-oriented and the pattern is `=~`'s RHS string.
+    pub preg: Vec<Option<regex::bytes::Regex>>,
 }
 
 const MAX_REGEX: usize = 10;
@@ -800,61 +800,39 @@ pub unsafe fn eq_expr(
             return -1;
         }
         if !val.s.data.is_empty() && !(*res).s.data.is_empty() && val.is_true >= 0 && (*res).is_true >= 0 {
-            let mut preg_tmp: crate::htslib_rs::c_compat::regex_t = std::mem::zeroed();
-            let mut compile_regex = false;
-            let preg_tmp_ptr = std::ptr::addr_of_mut!(preg_tmp);
-            let preg = if filt.curr_regex >= filt.max_regex {
-                if filt.curr_regex >= MAX_REGEX {
-                    compile_regex = true;
-                    preg_tmp_ptr
-                } else {
-                    compile_regex = true;
-                    let idx = filt.curr_regex;
-                    filt.max_regex += 1;
-                    filter_regex_ptr(filt, idx)
+            // Compile (or reuse a cached) regex for this `=~` position and test
+            // the RHS. Pattern = `val`'s string; haystack = `res`'s string. The
+            // pattern is taken owned so the immutable borrow of `val` ends before
+            // the error path's `expr_val_free(&mut val)`. Slots 0..MAX_REGEX are
+            // cached on `filt.preg`; positions beyond that compile a throwaway.
+            let pattern = String::from_utf8_lossy(&val.s.data).into_owned();
+            let matched = if filt.curr_regex >= MAX_REGEX {
+                match regex::bytes::Regex::new(&pattern) {
+                    Ok(re) => re.is_match(&(*res).s.data),
+                    Err(e) => {
+                        eprintln!("Failed regex: {e}");
+                        expr_val_free(&mut val);
+                        return -1;
+                    }
                 }
             } else {
-                filter_regex_ptr(filt, filt.curr_regex)
-            };
-            if preg.is_null() {
-                expr_val_free(&mut val);
-                return -1;
-            }
-            let mut val_cstr = val.s.data.clone();
-            val_cstr.push(0);
-            if compile_regex {
-                let ec = crate::htslib_rs::c_compat::regcomp(
-                    preg,
-                    val_cstr.as_ptr().cast::<core::ffi::c_char>(),
-                    crate::htslib_rs::c_compat::REG_EXTENDED
-                        | crate::htslib_rs::c_compat::REG_NOSUB,
-                );
-                if ec != 0 {
-                    let mut errbuf = [0u8; 1024];
-                    crate::htslib_rs::c_compat::regerror(
-                        ec,
-                        preg,
-                        errbuf.as_mut_ptr().cast::<core::ffi::c_char>(),
-                        errbuf.len(),
-                    );
-                    let msg_len = errbuf.iter().position(|&b| b == 0).unwrap_or(errbuf.len());
-                    eprintln!(
-                        "Failed regex: {}",
-                        String::from_utf8_lossy(&errbuf[..msg_len])
-                    );
-                    expr_val_free(&mut val);
-                    return -1;
+                let idx = filt.curr_regex;
+                if idx >= filt.max_regex {
+                    filt.max_regex += 1;
+                    match regex::bytes::Regex::new(&pattern) {
+                        Ok(re) => filt.preg[idx] = Some(re),
+                        Err(e) => {
+                            eprintln!("Failed regex: {e}");
+                            expr_val_free(&mut val);
+                            return -1;
+                        }
+                    }
                 }
-            }
-            let mut res_cstr = (*res).s.data.clone();
-            res_cstr.push(0);
-            let matched = crate::htslib_rs::c_compat::regexec(
-                preg,
-                res_cstr.as_ptr().cast::<core::ffi::c_char>(),
-                0,
-                std::ptr::null_mut(),
-                0,
-            ) == 0;
+                filt.preg[idx]
+                    .as_ref()
+                    .expect("regex slot compiled above")
+                    .is_match(&(*res).s.data)
+            };
             let r = if matched {
                 *str_ == b'='
             } else {
@@ -862,9 +840,6 @@ pub unsafe fn eq_expr(
             };
             (*res).is_true = c_bool(r);
             (*res).d = r as i32 as f64;
-            if preg == preg_tmp_ptr {
-                crate::htslib_rs::c_compat::regfree(preg);
-            }
             filt.curr_regex += 1;
         } else {
             (*res).is_true = 0;
@@ -963,9 +938,7 @@ pub fn hts_filter_init_bytes(expr: &[u8]) -> *mut hts_filter_t {
     let mut expr_buf = Vec::with_capacity(expr.len() + 101);
     expr_buf.extend_from_slice(expr);
     expr_buf.push(0);
-    let preg = (0..MAX_REGEX)
-        .map(|_| unsafe { std::mem::zeroed() })
-        .collect::<Vec<crate::htslib_rs::c_compat::regex_t>>();
+    let preg = (0..MAX_REGEX).map(|_| None).collect::<Vec<Option<regex::bytes::Regex>>>();
     Box::into_raw(Box::new(hts_filter_t {
         expr: expr_buf,
         parsed: false,
@@ -979,26 +952,13 @@ unsafe fn filter_expr_ptr(filt: &mut hts_filter_t) -> *mut u8 {
     filt.expr.as_mut_ptr()
 }
 
-unsafe fn filter_regex_ptr(
-    filt: &mut hts_filter_t,
-    idx: usize,
-) -> *mut crate::htslib_rs::c_compat::regex_t {
-    if idx >= filt.preg.len() {
-        std::ptr::null_mut()
-    } else {
-        std::ptr::addr_of_mut!(filt.preg[idx])
-    }
-}
-
 // original: hts_filter_free (htslib/hts_expr.c:863)
 pub unsafe fn hts_expr_c_863_hts_filter_free(filt: *mut hts_filter_t) {
     if filt.is_null() {
         return;
     }
-    let mut filt = Box::from_raw(filt);
-    for i in 0..filt.max_regex {
-        crate::htslib_rs::c_compat::regfree(&mut filt.preg[i]);
-    }
+    // Reclaiming the Box drops `preg` (the owned `regex::bytes::Regex` cache) too.
+    drop(Box::from_raw(filt));
 }
 
 unsafe fn hts_filter_eval_inner(

@@ -1,3 +1,29 @@
+// Pure UTC civil-date decomposition (relocated out of c_compat; used only here,
+// as the reference inverse of `hts_time_gm` in the round-trip test below).
+fn unix_time_utc_parts(now: libc::time_t) -> (i32, u32, u32, u32, u32, u32, usize) {
+    let secs = i64::from(now);
+    let days = secs.div_euclid(86_400);
+    let sod = secs.rem_euclid(86_400);
+    let hour = (sod / 3_600) as u32;
+    let minute = ((sod % 3_600) / 60) as u32;
+    let second = (sod % 60) as u32;
+
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let mut year = (yoe + era * 400) as i32;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let month = (mp + if mp < 10 { 3 } else { -9 }) as u32;
+    if month <= 2 {
+        year += 1;
+    }
+    let weekday = (days + 4).rem_euclid(7) as usize;
+    (year, month, day, hour, minute, second, weekday)
+}
+
 // original: test_normalised (htslib/test/test_time_funcs.c:36)
 pub unsafe fn test_test_time_funcs_c_36_test_normalised(
     start: libc::time_t,
@@ -6,8 +32,7 @@ pub unsafe fn test_test_time_funcs_c_36_test_normalised(
 ) -> i32 {
     let mut i = start;
     while i < end {
-        let (year, month, day, hour, min, sec, wday) =
-            crate::htslib_rs::c_compat::unix_time_utc_parts(i);
+        let (year, month, day, hour, min, sec, wday) = unix_time_utc_parts(i);
         let mut utc: libc::tm = std::mem::zeroed();
         utc.tm_sec = sec as i32;
         utc.tm_min = min as i32;
@@ -124,5 +149,16 @@ pub unsafe fn test_test_time_funcs_c_68_main(_argc: i32, _argv: *mut *mut u8) ->
         libc::EXIT_SUCCESS
     } else {
         libc::EXIT_FAILURE
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unix_time_utc_parts;
+
+    #[test]
+    fn unix_time_utc_parts_matches_known_dates() {
+        assert_eq!(unix_time_utc_parts(0), (1970, 1, 1, 0, 0, 0, 4));
+        assert_eq!(unix_time_utc_parts(1_748_868_896), (2025, 6, 2, 12, 54, 56, 1));
     }
 }

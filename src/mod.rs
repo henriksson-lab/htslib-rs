@@ -51,8 +51,6 @@ pub mod vcf;
 pub mod vcf_sweep;
 pub mod vcfutils;
 
-pub mod c_compat;
-
 use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
